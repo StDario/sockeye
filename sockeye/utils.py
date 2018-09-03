@@ -153,33 +153,17 @@ def save_params(arg_params: Mapping[str, mx.nd.NDArray], fname: str,
         save_dict.update({('aux:%s' % k): v.as_in_context(mx.cpu()) for k, v in aux_params.items()})
     mx.nd.save(fname, save_dict)
 
-
-def get_coherence_enforcer_excluding_params():
-
-    params = {'arg:target_output_weight', 'arg:target_output_bias', 'arg:target_output_wn_scale'}
-    return params
-
-def load_params(fname: str, loading_coherence_enforcer_params=False) -> Tuple[Dict[str, mx.nd.NDArray], Dict[str, mx.nd.NDArray]]:
+def load_params(fname: str) -> Tuple[Dict[str, mx.nd.NDArray], Dict[str, mx.nd.NDArray]]:
     """
     Loads parameters from a file.
 
     :param fname: The file containing the parameters.
     :return: Mapping from parameter names to the actual parameters for both the arg parameters and the aux parameters.
     """
-
-    to_exclude = set()
-    if loading_coherence_enforcer_params:
-        to_exclude = get_coherence_enforcer_excluding_params()
-
     save_dict = mx.nd.load(fname)
     arg_params = {}
     aux_params = {}
     for k, v in save_dict.items():
-        # print(k)
-
-        if k in to_exclude:
-            print("Ignoring " + k)
-            continue
 
         tp, name = k.split(':', 1)
         if tp == 'arg':

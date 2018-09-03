@@ -810,8 +810,6 @@ def get_training_data_iters(source: str, target: str,
                                                    batch_by_words,
                                                    batch_num_devices,
                                                    data_statistics.average_len_target_per_bucket)
-    # print(bucket_batch_sizes)
-    # return
     data_statistics.log(bucket_batch_sizes)
 
     data_loader = RawParallelDatasetLoader(buckets=buckets,

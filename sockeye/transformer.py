@@ -275,8 +275,6 @@ class TransformerGateEncoderBlock:
                                             cache=None)
         data = self.post_self_attention(data_self_att, data)
 
-
-        # print("This is changed here")
         ctx_data_self_att = self.ctx_self_attention(inputs=self.pre_ctx_self_attention(ctx_data, None),
                                             bias=ctx_bias,
                                             cache=None)
@@ -408,7 +406,7 @@ class TransformerEncoderBlockShared:
 
         return data, ctx_data
 
-class TransformerCtxStandardEncoderBlockShared:
+class TransformerCtxStandardEncoderBlock:
     """
     A transformer encoder block consists self-attention and a feed-forward layer with pre/post process blocks
     in between.
@@ -886,8 +884,6 @@ class TransformerCtxDecoderBlock:
 
         # target_aux = self.preattn_ff(self.pre_preattn_ff(target, None))
         # target_aux = self.post_preattn_ff(target_aux, target)
-        # target_aux = target
-
 
 
         # encoder attention
@@ -898,7 +894,6 @@ class TransformerCtxDecoderBlock:
 
 
         # ctx encoder attention
-        # print("Change target to target_aux")
         target_ctx_enc_att = self.ctx_enc_attention(queries=self.pre_ctx_enc_attention(target_main, None),
                                                     memory=ctx_source,
                                                     bias=ctx_source_bias)
@@ -911,29 +906,11 @@ class TransformerCtxDecoderBlock:
         # target_ctx_ff = self.ctx_ff(self.pre_ctx_ff(target_ctx, None))
         # target_ctx = self.post_ctx_ff(target_ctx_ff, target_ctx)
 
-
-        # print("This here is modified for simplicity")
-        # target_ctx_ff = self.ctx_ff(self.pre_ctx_ff(target_ctx, None))
-        # target_ctx = self.post_ctx_ff(target_ctx_ff, target_ctx)
-        #
-        # target_ff = self.ff(self.pre_ff(target_main, None))
-        # target_main = self.post_ff(target_ff, target_main)
-
-        # target = mx.sym.Concat(target, target_ctx, dim=2)
-        # target = self.merge_ff(target)
-
         target = self.gate(target_main, target_ctx, target)
 
         target_postgate_ff = self.postgate_ff(self.pre_postgate_ff(target, None))
         target = self.post_postgate_ff(target_postgate_ff, target)
 
-        # print(target.infer_shape(ctx_source=(10,20), source=(10,60), target=(10,60))[1])
-        # feed-forward
-        # target_ff = self.ff(self.pre_ff(target, None))
-        # target_ff_alt = self.ctx_ff(self.pre_ff(target, None))
-        # target = self.post_ff(target_ff, target_ff_alt)
-
-        # print(target.infer_shape(ctx_source=(10,20), source=(10,60), target=(10,60))[1])
 
         return target
 

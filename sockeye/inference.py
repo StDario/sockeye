@@ -240,7 +240,6 @@ class InferenceModel(model.SockeyeModel):
             states = self.decoder.state_variables(decode_step)
             
             state_names = [state.name for state in states]
-            # print(state_names)
 
 
             # embedding for previous word
@@ -822,14 +821,6 @@ class Translator:
         :return: Input for translate method.
         """
 
-        # line_ctx = ""
-        # print(sentence)
-        # contents = sentence.split('!@#$')
-        # if len(contents) == 2:
-        #     line_ctx = contents[0]
-        #
-        # sentence = [line_ctx, contents[-1]]
-
         tokens = list(data_io.get_tokens(sentence[1]))
         ctx_tokens = list(data_io.get_tokens(sentence[0]))
         return TranslatorInput(id=sentence_id, sentence=sentence[1].rstrip(), tokens=[tokens, ctx_tokens])
@@ -866,7 +857,6 @@ class Translator:
         # Sort longest to shortest (to rather fill batches of shorter than longer sequences)
 
         input_chunks = sorted(input_chunks, key=lambda chunk: len(chunk.tokens[0]), reverse=True)
-        # print(input_chunks)
 
         # translate in batch-sized blocks over input chunks
         for batch_id, chunks in enumerate(utils.grouper(input_chunks, self.batch_size)):
@@ -877,7 +867,6 @@ class Translator:
             if rest > 0:
                 logger.debug("Extending the last batch to the full batch size (%d)", self.batch_size)
                 batch = batch + [batch[0]] * rest
-            # print(batch)
             batch_translations = self.translate_nd(*self._get_inference_input(batch))
 
             # truncate to remove filler translations
@@ -900,7 +889,6 @@ class Translator:
                 translations_to_concat = [translated_chunk.translation for translated_chunk in chunks]
                 translation = self._concat_translations(translations_to_concat)
 
-            # print(translation.target_ids)
             results.append(self._make_result(trans_input, translation))
 
         return results

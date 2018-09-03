@@ -278,11 +278,6 @@ class TrainingModel(model.SockeyeModel):
         if 'dist' in kvstore:
             self._check_dist_kvstore_requirements(lr_decay_opt_states_reset, lr_decay_param_reset, optimizer)
 
-        # while train_iter.iter_next():
-        #     t = train_iter.next()
-        #     print(t)
-        # return
-
         utils.check_condition(gradient_clipping_type in C.GRADIENT_CLIPPING_TYPES,
                               "Unknown gradient clipping type %s" % gradient_clipping_type)
 

@@ -202,7 +202,6 @@ class SockeyeModel:
                                                                   self.decoder.get_num_hidden()))
                 w_out_target = w_embed_target
 
-                print("Since we are not tying all embeddings, tie ctx and source")
                 w_ctx_embed_source = w_embed_source
 
         return w_embed_source, w_embed_target, w_out_target, w_ctx_embed_source
@@ -213,8 +212,6 @@ class SockeyeModel:
         """
         # encoder & decoder first (to know the decoder depth)
         self.encoder = encoder.get_encoder(self.config.config_encoder)
-        # self.ctx_encoder = encoder.get_encoder(self.config.config_encoder, 'ctx_')
-        # self.ctx_encoder = self.encoder
         self.decoder = decoder.get_decoder(self.config.config_decoder)
 
         # source & target embeddings

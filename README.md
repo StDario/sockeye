@@ -1,3 +1,7 @@
+# Context-aware Sockeye
+
+This repository contains an implementation for a Transformer context-aware model. A context-aware RNN and Convolutional models are not currently supported. 
+
 # Sockeye
 
 [![PyPI version](https://badge.fury.io/py/sockeye.svg)](https://badge.fury.io/py/sockeye)

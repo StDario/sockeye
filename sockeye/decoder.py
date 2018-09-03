@@ -191,6 +191,9 @@ class TransformerDecoder(Decoder):
         if self.config.model_type == "ctx_dec" or self.config.model_type == "ctx_dec_alt":
             self.layers = [transformer.TransformerCtxDecoderBlock(
                 config, prefix="%s%d_" % (prefix, i)) for i in range(config.num_layers)]
+        elif self.config.model_type == "ctx_standard":
+            self.layers = [transformer.TransformerCtxComplexDecoderBlock(
+                config, prefix="%s%d_" % (prefix, i)) for i in range(config.num_layers)]
         else:
             self.layers = [transformer.TransformerDecoderBlock(
                 config, prefix="%s%d_" % (prefix, i)) for i in range(config.num_layers)]
