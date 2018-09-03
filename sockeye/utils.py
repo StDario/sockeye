@@ -15,8 +15,6 @@
 A set of utility methods.
 """
 import errno
-import fcntl
-import glob
 import gzip
 import itertools
 import logging
@@ -27,12 +25,14 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager, ExitStack
-from typing import Mapping, Any, List, Iterator, Iterable, Set, Tuple, Dict, Optional, Union, IO, TypeVar, cast
+from typing import Mapping, Any, List, Iterator, Iterable, Set, Tuple, Dict, Optional, Union, IO
 
+import fcntl
 import mxnet as mx
 import numpy as np
 
-from sockeye import __version__, constants as C
+import sockeye.constants as C
+from sockeye import __version__
 from sockeye.log import log_sockeye_version, log_mxnet_version
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ def log_basic_info(args) -> None:
     logger.info("Arguments: %s", args)
 
 
-def seed_rngs(seed: int) -> None:
+def seedRNGs(seed: int) -> None:
     """
     Seed the random number generators (Python, Numpy and MXNet)
 
@@ -131,7 +131,7 @@ def save_graph(symbol: mx.sym.Symbol, filename: str, hide_weights: bool = True):
 
 def compute_lengths(sequence_data: mx.sym.Symbol) -> mx.sym.Symbol:
     """
-    Computes sequence lengths of PAD_ID-padded data in sequence_data.
+    Computes sequence lenghts of PAD_ID-padded data in sequence_data.
 
     :param sequence_data: Input data. Shape: (batch_size, seq_len).
     :return: Length data. Shape: (batch_size,).
@@ -154,29 +154,36 @@ def save_params(arg_params: Mapping[str, mx.nd.NDArray], fname: str,
     mx.nd.save(fname, save_dict)
 
 
-def load_params(fname: str) -> Tuple[Dict[str, mx.nd.NDArray], Dict[str, mx.nd.NDArray]]:
+def get_coherence_enforcer_excluding_params():
+
+    params = {'arg:target_output_weight', 'arg:target_output_bias', 'arg:target_output_wn_scale'}
+    return params
+
+def load_params(fname: str, loading_coherence_enforcer_params=False) -> Tuple[Dict[str, mx.nd.NDArray], Dict[str, mx.nd.NDArray]]:
     """
     Loads parameters from a file.
 
     :param fname: The file containing the parameters.
     :return: Mapping from parameter names to the actual parameters for both the arg parameters and the aux parameters.
     """
+
+    to_exclude = set()
+    if loading_coherence_enforcer_params:
+        to_exclude = get_coherence_enforcer_excluding_params()
+
     save_dict = mx.nd.load(fname)
     arg_params = {}
     aux_params = {}
     for k, v in save_dict.items():
+        # print(k)
+
+        if k in to_exclude:
+            print("Ignoring " + k)
+            continue
+
         tp, name = k.split(':', 1)
         if tp == 'arg':
-            """TODO(fhieber):
-            temporary weight split for models with combined weight for keys & values
-            in transformer source attention layers. This can be removed once with the next major version change."""
-            if "att_enc_kv2h_weight" in name:
-                logger.info("Splitting '%s' parameters into separate k & v matrices.", name)
-                v_split = mx.nd.split(v, axis=0, num_outputs=2)
-                arg_params[name.replace('kv2h', "k2h")] = v_split[0]
-                arg_params[name.replace('kv2h', "v2h")] = v_split[1]
-            else:
-                arg_params[name] = v
+            arg_params[name] = v
         if tp == 'aux':
             aux_params[name] = v
     return arg_params, aux_params
@@ -251,54 +258,57 @@ class OnlineMeanAndVariance:
             return self._M2 / self._count
 
 
-def topk(scores: mx.nd.NDArray,
-         k: int,
-         batch_size: int,
-         offset: mx.nd.NDArray,
-         use_mxnet_topk: bool) -> Tuple[mx.nd.NDArray, mx.nd.NDArray, mx.nd.NDArray]:
+def smallest_k(matrix: np.ndarray, k: int,
+               only_first_row: bool = False) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]:
     """
-    Get the lowest k elements per sentence from a `scores` matrix.
+    Find the smallest elements in a numpy matrix.
 
-    :param scores: Vocabulary scores for the next beam step. (batch_size * beam_size, target_vocabulary_size)
-    :param k: The number of smallest scores to return.
-    :param batch_size: Number of sentences being decoded at once.
-    :param offset: Array to add to the hypothesis indices for offsetting in batch decoding.
-    :param use_mxnet_topk: True to use the mxnet implementation or False to use the numpy one.
+    :param matrix: Any matrix.
+    :param k: The number of smallest elements to return.
+    :param only_first_row: If true the search is constrained to the first row of the matrix.
     :return: The row indices, column indices and values of the k smallest items in matrix.
     """
-    # (batch_size, beam_size * target_vocab_size)
-    folded_scores = scores.reshape((batch_size, k * scores.shape[-1]))
-
-    if use_mxnet_topk:
-        # pylint: disable=unbalanced-tuple-unpacking
-        values, indices = mx.nd.topk(folded_scores, axis=1, k=k, ret_typ='both', is_ascend=True)
-        best_hyp_indices, best_word_indices = mx.nd.array(np.unravel_index(indices.astype(np.int32).asnumpy().ravel(),
-                                                                           scores.shape),
-                                                          dtype='int32',
-                                                          ctx=scores.context)
-
+    if only_first_row:
+        flatten = matrix[:1, :].flatten()
     else:
-        folded_scores = folded_scores.asnumpy()
-        # Get the scores
-        # Indexes into folded_scores: (batch_size, beam_size)
-        flat_idxs = np.argpartition(folded_scores, range(k))[:, :k]
-        # Score values: (batch_size, beam_size)
-        values = mx.nd.array(folded_scores[np.arange(folded_scores.shape[0])[:, None], flat_idxs], ctx=scores.context)
-        best_hyp_indices, best_word_indices = mx.nd.array(np.unravel_index(flat_idxs.ravel(), scores.shape),
-                                                          dtype='int32', ctx=scores.context)
+        flatten = matrix.flatten()
 
-    if batch_size > 1:
-        # Offsetting the indices to match the shape of the scores matrix
-        best_hyp_indices += offset
+    # args are the indices in flatten of the k smallest elements
+    args = np.argpartition(flatten, k)[:k]
+    # args are the indices in flatten of the sorted k smallest elements
+    args = args[np.argsort(flatten[args])]
+    # flatten[args] are the values for args
+    return np.unravel_index(args, matrix.shape), flatten[args]
 
-    values = values.reshape((-1, 1))
-    return best_hyp_indices, best_word_indices, values
+
+def smallest_k_mx(matrix: mx.nd.NDArray, k: int,
+                  only_first_row: bool = False) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]:
+    """
+    Find the smallest elements in a NDarray.
+
+    :param matrix: Any matrix.
+    :param k: The number of smallest elements to return.
+    :param only_first_row: If True the search is constrained to the first row of the matrix.
+    :return: The row indices, column indices and values of the k smallest items in matrix.
+    """
+    if only_first_row:
+        matrix = mx.nd.reshape(matrix[0], shape=(1, -1))
+
+    # pylint: disable=unbalanced-tuple-unpacking
+    values, indices = mx.nd.topk(matrix, axis=None, k=k, ret_typ='both', is_ascend=True)
+
+    return np.unravel_index(indices.astype(np.int32).asnumpy(), matrix.shape), values
 
 
 def chunks(some_list: List, n: int) -> Iterable[List]:
     """Yield successive n-sized chunks from l."""
     for i in range(0, len(some_list), n):
         yield some_list[i:i + n]
+
+def ctx_chunks(some_list: List, n: int) -> Iterable[List]:
+    """Yield successive n-sized chunks from l."""
+    for i in range(0, len(some_list[0]), n):
+        yield [some_list[0][i:i + n], some_list[1]]
 
 
 def get_tokens(line: str) -> Iterator[str]:
@@ -435,21 +445,20 @@ def average_arrays(arrays: List[mx.nd.NDArray]) -> mx.nd.NDArray:
 
 def get_num_gpus() -> int:
     """
-    Gets the number of GPUs available on the host.
+    Gets the number of GPUs available on the host (depends on nvidia-smi).
 
     :return: The number of GPUs on the system.
     """
-    # TODO (domhant): Switch to mx.context.num_gpus() with mxnet version 1.3
-    for device_id in itertools.count():
-        try:
-            mx.nd.zeros((1,), ctx=mx.gpu(device_id))
-        except mx.MXNetError:
-            return device_id
-    # Note: Return statement to make mypy happy, the for loop is infinite, so an exception is the only way out.
-    return device_id + 1
+    if shutil.which("nvidia-smi") is None:
+        logger.warning("Couldn't find nvidia-smi, therefore we assume no GPUs are available.")
+        return 0
+    sp = subprocess.Popen(['nvidia-smi', '-L'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out_str = sp.communicate()[0].decode("utf-8")
+    num_gpus = len(out_str.rstrip("\n").split("\n"))
+    return num_gpus
 
 
-def get_gpu_memory_usage(ctx: List[mx.context.Context]) -> Dict[int, Tuple[int, int]]:
+def get_gpu_memory_usage(ctx: List[mx.context.Context]) -> Optional[Dict[int, Tuple[int, int]]]:
     """
     Returns used and total memory for GPUs identified by the given context list.
 
@@ -460,7 +469,7 @@ def get_gpu_memory_usage(ctx: List[mx.context.Context]) -> Dict[int, Tuple[int, 
         ctx = [ctx]
     ctx = [c for c in ctx if c.device_type == 'gpu']
     if not ctx:
-        return {}
+        return None
     if shutil.which("nvidia-smi") is None:
         logger.warning("Couldn't find nvidia-smi, therefore we assume no GPUs are available.")
         return {}
@@ -474,42 +483,12 @@ def get_gpu_memory_usage(ctx: List[mx.context.Context]) -> Dict[int, Tuple[int, 
     for line in result:
         gpu_id, mem_used, mem_total = line.split(",")
         memory_data[int(gpu_id)] = (int(mem_used), int(mem_total))
-    log_gpu_memory_usage(memory_data)
     return memory_data
 
 
 def log_gpu_memory_usage(memory_data: Dict[int, Tuple[int, int]]):
     log_str = " ".join("GPU %d: %d/%d MB (%.2f%%)" % (k, v[0], v[1], v[0] * 100.0/v[1]) for k, v in memory_data.items())
     logger.info(log_str)
-
-
-def determine_context(device_ids: List[int],
-                      use_cpu: bool,
-                      disable_device_locking: bool,
-                      lock_dir: str,
-                      exit_stack: ExitStack) -> List[mx.Context]:
-    """
-    Determine the MXNet context to run on (CPU or GPU).
-
-    :param device_ids: List of device as defined from the CLI.
-    :param use_cpu: Whether to use the CPU instead of GPU(s).
-    :param disable_device_locking: Disable Sockeye's device locking feature.
-    :param lock_dir: Directory to place device lock files in.
-    :param exit_stack: An ExitStack from contextlib.
-    :return: A list with the context(s) to run on.
-    """
-    if use_cpu:
-        context = [mx.cpu()]
-    else:
-        num_gpus = get_num_gpus()
-        check_condition(num_gpus >= 1,
-                        "No GPUs found, consider running on the CPU with --use-cpu ")
-        if disable_device_locking:
-            context = expand_requested_device_ids(device_ids)
-        else:
-            context = exit_stack.enter_context(acquire_gpus(device_ids, lock_dir=lock_dir))
-        context = [mx.gpu(gpu_id) for gpu_id in context]
-    return context
 
 
 def expand_requested_device_ids(requested_device_ids: List[int]) -> List[int]:
@@ -523,8 +502,6 @@ def expand_requested_device_ids(requested_device_ids: List[int]) -> List[int]:
     :return: A list of device ids.
     """
     num_gpus_available = get_num_gpus()
-    if "CUDA_VISIBLE_DEVICES" in os.environ:
-        logger.warning("Sockeye currently does not respect CUDA_VISIBLE_DEVICE settings when locking GPU devices.")
     return _expand_requested_device_ids(requested_device_ids, num_gpus_available)
 
 
@@ -551,7 +528,7 @@ def _expand_requested_device_ids(requested_device_ids: List[int], num_gpus_avail
 @contextmanager
 def acquire_gpus(requested_device_ids: List[int], lock_dir: str = "/tmp",
                  retry_wait_min: int = 10, retry_wait_rand: int = 60,
-                 num_gpus_available: Optional[int] = None):
+                 num_gpus_available: Optional[int]=None):
     """
     Acquire a number of GPUs in a transactional way. This method should be used inside a `with` statement.
     Will try to acquire all the requested number of GPUs. If currently
@@ -608,44 +585,33 @@ def acquire_gpus(requested_device_ids: List[int], lock_dir: str = "/tmp",
     candidates_to_request += [remaining_device_ids for _ in range(num_arbitrary_device_ids)]
 
     while True:
-
         with ExitStack() as exit_stack:
-            any_failed = False
             acquired_gpus = []  # type: List[int]
-            with GpuFileLock(candidates=["master_lock"], lock_dir=lock_dir) as master_lock:  # type: str
-                # Only one process, determined by the master lock, can try acquiring gpu locks at a time.
-                # This will make sure that we use consecutive device ids whenever possible.
-                if master_lock is not None:
-                    for candidates in candidates_to_request:
-                        gpu_id = exit_stack.enter_context(GpuFileLock(candidates=candidates, lock_dir=lock_dir))
-                        if gpu_id is not None:
-                            acquired_gpus.append(cast(int, gpu_id))
-                        else:
-                            if len(candidates) == 1:
-                                logger.info("Could not acquire GPU %d. It's currently locked.", candidates[0])
-                            any_failed = True
-                            break
-            if master_lock is not None and not any_failed:
+            any_failed = False
+            for candidates in candidates_to_request:
+                gpu_id = exit_stack.enter_context(GpuFileLock(candidates=candidates, lock_dir=lock_dir))  # type: ignore
+                if gpu_id is not None:
+                    acquired_gpus.append(gpu_id)
+                else:
+                    if len(candidates) == 1:
+                        logger.info("Could not acquire GPU %d. It's currently locked.", candidates[0])
+                    any_failed = True
+                    break
+            if not any_failed:
                 try:
                     yield acquired_gpus
-                except:  # pylint: disable=try-except-raise
+                except:
                     raise
                 return
+        # couldn't acquire all GPUs, let's wait and try again later
 
         # randomize so that multiple processes starting at the same time don't retry at a similar point in time
         if retry_wait_rand > 0:
             retry_wait_actual = retry_wait_min + random.randint(0, retry_wait_rand)
         else:
             retry_wait_actual = retry_wait_min
-
-        if master_lock is None:
-            logger.info("Another process is acquiring GPUs at the moment will try again in %ss." % retry_wait_actual)
-        else:
-            logger.info("Not enough GPUs available will try again in %ss." % retry_wait_actual)
+        logger.info("Not enough GPUs available will try again in %ss." % retry_wait_actual)
         time.sleep(retry_wait_actual)
-
-
-GpuDeviceType = TypeVar('GpuDeviceType')
 
 
 class GpuFileLock:
@@ -657,23 +623,22 @@ class GpuFileLock:
     :param lock_dir: The directory for storing the lock file.
     """
 
-    def __init__(self, candidates: List[GpuDeviceType], lock_dir: str) -> None:
+    def __init__(self, candidates: List[int], lock_dir: str) -> None:
         self.candidates = candidates
         self.lock_dir = lock_dir
         self.lock_file = None  # type: Optional[IO[Any]]
         self.lock_file_path = None  # type: Optional[str]
-        self.gpu_id = None  # type: Optional[GpuDeviceType]
+        self.gpu_id = None  # type: Optional[int]
         self._acquired_lock = False
 
-    def __enter__(self) -> Optional[GpuDeviceType]:
+    def __enter__(self) -> Optional[int]:
         for gpu_id in self.candidates:
-            lockfile_path = os.path.join(self.lock_dir, "sockeye.gpu{}.lock".format(gpu_id))
+            lockfile_path = os.path.join(self.lock_dir, "sockeye.gpu%d.lock" % gpu_id)
             try:
                 lock_file = open(lockfile_path, 'w')
-            except IOError:
+            except IOError as e:
                 if errno.EACCES:
-                    logger.warning("GPU {} is currently locked by a different process "
-                                   "(Permission denied).".format(gpu_id))
+                    logger.warning("GPU %d is currently locked by a different process (Permission denied).", gpu_id)
                     continue
             try:
                 # exclusive non-blocking lock
@@ -687,7 +652,7 @@ class GpuFileLock:
                 self.lock_file = lock_file
                 self.lockfile_path = lockfile_path
 
-                logger.info("Acquired GPU {}.".format(gpu_id))
+                logger.info("Acquired GPU %d." % gpu_id)
 
                 return gpu_id
             except IOError as e:
@@ -696,12 +661,12 @@ class GpuFileLock:
                     logger.error("Failed acquiring GPU lock.", exc_info=True)
                     raise
                 else:
-                    logger.debug("GPU {} is currently locked.".format(gpu_id))
+                    logger.debug("GPU %d is currently locked.", gpu_id)
         return None
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.gpu_id is not None:
-            logger.info("Releasing GPU {}.".format(self.gpu_id))
+            logger.info("Releasing GPU %d.", self.gpu_id)
         if self.lock_file is not None:
             if self._acquired_lock:
                 fcntl.flock(self.lock_file, fcntl.LOCK_UN)
@@ -825,7 +790,6 @@ def grouper(iterable: Iterable, size: int) -> Iterable:
     Collect data into fixed-length chunks or blocks without discarding underfilled chunks or padding them.
 
     :param iterable: A sequence of inputs.
-    :param size: Chunk size.
     :return: Sequence of chunks.
     """
     it = iter(iterable)
@@ -835,85 +799,27 @@ def grouper(iterable: Iterable, size: int) -> Iterable:
             return
         yield chunk
 
-
-def metric_value_is_better(new: float, old: float, metric: str) -> bool:
+def grouper_ctx(iterable: Iterable, size: int) -> Iterable:
     """
-    Returns true if new value is strictly better than old for given metric.
+    Collect data into fixed-length chunks or blocks without discarding underfilled chunks or padding them.
+
+    :param iterable: A sequence of inputs.
+    :return: Sequence of chunks.
     """
-    if C.METRIC_MAXIMIZE[metric]:
-        return new > old
-    else:
-        return new < old
-
-
-def cleanup_params_files(output_folder: str, max_to_keep: int, checkpoint: int, best_checkpoint: int):
-    """
-    Deletes oldest parameter files from a model folder.
-
-    :param output_folder: Folder where param files are located.
-    :param max_to_keep: Maximum number of files to keep, negative to keep all.
-    :param checkpoint: Current checkpoint (i.e. index of last params file created).
-    :param best_checkpoint: Best checkpoint. The parameter file corresponding to this checkpoint will not be deleted.
-    """
-    if max_to_keep <= 0:
-        return
-    existing_files = glob.glob(os.path.join(output_folder, C.PARAMS_PREFIX + "*"))
-    params_name_with_dir = os.path.join(output_folder, C.PARAMS_NAME)
-    for n in range(0, max(1, checkpoint - max_to_keep + 1)):
-        if n != best_checkpoint:
-            param_fname_n = params_name_with_dir % n
-            if param_fname_n in existing_files:
-                os.remove(param_fname_n)
-
-
-def cast_conditionally(data: mx.sym.Symbol, dtype: str) -> mx.sym.Symbol:
-    """
-    Workaround until no-op cast will be fixed in MXNet codebase.
-    Creates cast symbol only if dtype is different from default one, i.e. float32.
-
-    :param data: Input symbol.
-    :param dtype: Target dtype.
-    :return: Cast symbol or just data symbol.
-    """
-    if dtype != C.DTYPE_FP32:
-        return mx.sym.cast(data=data, dtype=dtype)
-    return data
-
-
-def uncast_conditionally(data: mx.sym.Symbol, dtype: str) -> mx.sym.Symbol:
-    """
-    Workaround until no-op cast will be fixed in MXNet codebase.
-    Creates cast to float32 symbol only if dtype is different from default one, i.e. float32.
-
-    :param data: Input symbol.
-    :param dtype: Input symbol dtype.
-    :return: Cast symbol or just data symbol.
-    """
-    if dtype != C.DTYPE_FP32:
-        return mx.sym.cast(data=data, dtype=C.DTYPE_FP32)
-    return data
-
-
-def split(data: mx.nd.NDArray,
-          num_outputs: int,
-          axis: int = 1,
-          squeeze_axis: bool = False) -> List[mx.nd.NDArray]:
-    """
-    Version of mxnet.ndarray.split that always returns a list.  The original
-    implementation only returns a list if num_outputs > 1:
-    https://mxnet.incubator.apache.org/api/python/ndarray/ndarray.html#mxnet.ndarray.split
-
-    Splits an array along a particular axis into multiple sub-arrays.
-
-    :param data: The input.
-    :param num_outputs: Number of splits. Note that this should evenly divide
-                        the length of the axis.
-    :param axis: Axis along which to split.
-    :param squeeze_axis: If true, Removes the axis with length 1 from the shapes
-                         of the output arrays.
-    :return: List of NDArrays resulting from the split.
-    """
-    ndarray_or_list = data.split(num_outputs=num_outputs, axis=axis, squeeze_axis=squeeze_axis)
-    if num_outputs == 1:
-        return [ndarray_or_list]
-    return ndarray_or_list
+    it = iter(iterable)
+    while True:
+        chunk = list(itertools.islice(it, size))
+        new_chunk = []
+        for c in chunk:
+            contents = c.split('!@#$')
+            line_ctx = ""
+            if len(contents) == 1:
+                line = contents[0]
+            else:
+                line_ctx = contents[0]
+                line = contents[1]
+            new_chunk.append([line_ctx, line])
+        chunk = new_chunk
+        if not chunk:
+            return
+        yield chunk

@@ -17,42 +17,15 @@ Extra optimizers not included in MXNet.
 
 from abc import abstractmethod
 from collections import namedtuple
-from typing import Any, Dict, Optional, Tuple
-
 import math
+from typing import Optional, Tuple
+
 import mxnet as mx
 
-from . import config
-from .lr_scheduler import LearningRateScheduler
-from .utils import check_condition
+from sockeye.utils import check_condition
 
 BatchState = namedtuple("BatchState", ["metric_val"])
 CheckpointState = namedtuple("CheckpointState", ["checkpoint", "metric_val"])
-
-
-class OptimizerConfig(config.Config):
-
-    def __init__(self,
-                 name: str,
-                 params: Dict[str, Any],
-                 kvstore: str,
-                 initializer: mx.initializer.Initializer,
-                 gradient_clipping_type: str,
-                 gradient_clipping_threshold: Optional[float]) -> None:
-        super().__init__()
-        self.name = name
-        self.params = params
-        self.kvstore = kvstore
-        self.initializer = initializer
-        self.gradient_clipping_type = gradient_clipping_type
-        self.gradient_clipping_threshold = gradient_clipping_threshold
-
-    @property
-    def lr_scheduler(self) -> Optional[LearningRateScheduler]:
-        return self.params.get("lr_scheduler", None)
-
-    def set_lr_scheduler(self, lr_scheduler: Optional[LearningRateScheduler]):
-        self.params["lr_scheduler"] = lr_scheduler
 
 
 class SockeyeOptimizer(mx.optimizer.Optimizer):
@@ -203,7 +176,7 @@ class Eve(SockeyeOptimizer):
             else:
                 f_hat = f
                 d = 1.
-            return f_hat, d
+            return (f_hat, d)
 
         batch_d, checkpoint_d = None, None
 
