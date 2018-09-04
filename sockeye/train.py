@@ -662,7 +662,7 @@ def create_training_model(model_config: model.ModelConfig,
         training_model.load_params_from_file(os.path.join(training_state_dir, C.TRAINING_STATE_PARAMS_NAME))
     elif args.params:
         logger.info("Training will initialize from parameters loaded from '%s'", args.params)
-        training_model.load_params_from_file(args.params, args.loading_coherence_enforcer_params)
+        training_model.load_params_from_file(args.params)
 
     return training_model
 

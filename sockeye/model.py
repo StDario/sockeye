@@ -144,7 +144,7 @@ class SockeyeModel:
         utils.save_params(self.params.copy(), fname)
         logging.info('Saved params to "%s"', fname)
 
-    def load_params_from_file(self, fname: str, loading_coherence_enforcer_params=False):
+    def load_params_from_file(self, fname: str):
         """
         Loads and sets model parameters from file.
 
@@ -154,7 +154,7 @@ class SockeyeModel:
         utils.check_condition(os.path.exists(fname), "No model parameter file found under %s. "
                                                      "This is either not a model directory or the first training "
                                                      "checkpoint has not happened yet." % fname)
-        self.params, _ = utils.load_params(fname, loading_coherence_enforcer_params)
+        self.params, _ = utils.load_params(fname)
         logger.info('Loaded params from "%s"', fname)
 
     @staticmethod
